@@ -1,0 +1,30 @@
+name: Request access
+description: Ask for access to download toolkit. It is free.
+title: "Access request"
+labels: ["access request"]
+assignees: ["skyehosting"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        toolkit is free. Its download is in a private GitHub repository, and access is given by hand to **the GitHub account that opens this request**.
+
+        **This request is public.** Anyone can read this issue, so leave out email addresses and anything else private.
+
+        Once you are added, GitHub sends that account an invitation. Accept it, and the download on the [toolkit page](https://skyehosting.github.io/claude-toolkit/#get) works.
+  - type: textarea
+    id: use
+    attributes:
+      label: What will you use it for?
+      description: Optional. A sentence is plenty.
+      placeholder: For example, three Claude Code sessions over a folder of web projects.
+    validations:
+      required: false
+  - type: checkboxes
+    id: licence
+    attributes:
+      label: Licence
+      description: toolkit is free and source-available under the [PolyForm Shield License 1.0.0](https://polyformproject.org/licenses/shield/1.0.0).
+      options:
+        - label: I agree to use toolkit under its licence. I won't sell it or a fork of it, or offer anything built from its code as a product that competes with it.
+          required: true

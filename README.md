@@ -13,6 +13,14 @@ The toolkit itself lives in a **private** repository, `skyehosting/claude-toolki
 the download links here point at its releases. They 404 for anyone without access, which is
 the point: the page is public, the plugin is not.
 
+## Requests for access
+
+The page's **Request access** button opens the issue form in
+`.github/ISSUE_TEMPLATE/request-access.yml`: a signed-in GitHub user asks for the download, and the
+request arrives here as a public issue labelled `access request`. To grant it, invite that account to
+`claude-toolkit-src`, then close the issue. The link carries only `?template=`, because GitHub answers
+a link with parameters the visitor may not set (labels, assignees) with a 404.
+
 ## Checked at
 
 `node "<toolkit>/cli/capture.js" index.html --set all` — monitors 1920x1080 at 100%, 125%
