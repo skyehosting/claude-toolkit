@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>toolkit v5 — coordination for Claude Code</title>
+<meta name="description" content="A Claude Code plugin for running several sessions over one folder of projects: workspace-wide file locks, a security scan of every edit, a Stop gate that verifies before a turn ends, adaptive-UI rules, and design reviews by a panel of judges.">
+<meta name="color-scheme" content="dark">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%230b0c0f'/%3E%3Cpath d='M9 11.5h14M9 16h14M9 20.5h9' stroke='%23e0855b' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+
+<meta property="og:title" content="toolkit v5 — coordination for Claude Code">
+<meta property="og:description" content="Workspace-wide file locks, a security scan of every edit, a Stop gate that verifies before a turn ends, adaptive-UI rules, and design reviews by a panel of judges.">
+<meta property="og:type" content="website">
+
+<style>
+/* ============================================================
+   Tokens
+   One spacing scale, one type scale, one accent. Everything on the
+   page is built from these — nothing invents its own value.
+   ============================================================ */
+:root {
+  --bg:        #0b0c0f;
+  --bg-2:      #0e1014;
+  --surface:   #131620;
+  --surface-2: #171b26;
+  --line:      #ffffff14;
+  --line-2:    #ffffff22;
+
+  --ink:   #e9ecf3;          /* 16.4:1 on --bg */
+  --ink-2: #a3acbd;          /* 8.1:1  on --bg */
+  --ink-3: #7b8699;          /* 5.1:1  on --bg */
+
+  --accent:      #e0855b;    /* 7.4:1 on --bg */
+  --accent-soft: #e0855b1f;
+  --accent-ink:  #1a0f08;    /* on an accent fill */
+
+  --good:  #5ec98a;
+  --warn:  #e6b35c;
+  --warn-soft: #e6b35c14;
+
+  /* 4px scale */
+  --s1: .25rem; --s2: .5rem;  --s3: .75rem; --s4: 1rem;
+  --s5: 1.5rem; --s6: 2rem;   --s7: 3rem;   --s8: 4.5rem; --s9: 7rem;
+
+  --r-sm: .5rem; --r: .75rem; --r-lg: 1.125rem; --r-xl: 1.5rem;
+
+  /* Fluid type. Every preferred value carries a rem term so the page
+     still responds to browser zoom (WCAG 1.4.4). */
+  --t-hero:  clamp(2.25rem, 1.6rem + 2.9vw, 4.25rem);
+  --t-h2:    clamp(1.6rem,  1.3rem + 1.35vw, 2.5rem);
+  --t-h3:    clamp(1.05rem, .98rem + .3vw,  1.25rem);
+  --t-lead:  clamp(1.05rem, .99rem + .33vw, 1.3rem);
+  --t-body:  clamp(.95rem,  .92rem + .14vw, 1.0625rem);
+  --t-sm:    clamp(.85rem,  .83rem + .1vw,  .925rem);
+  --t-xs:    .78rem;
+
+  --mono: "JetBrains Mono", ui-monospace, SFMono-Regular, "Cascadia Mono", Consolas, monospace;
+  --sans: "Inter", system-ui, -apple-system, "Segoe UI Variable Text", "Segoe UI", Roboto, sans-serif;
+
+  --ease: cubic-bezier(.22, .61, .36, 1);
+}
+
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+html { scroll-behavior: smooth; -webkit-text-size-adjust: 100%; }
+@media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: var(--t-body);
+  line-height: 1.65;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+  overflow-x: hidden;           /* a stray wide child must never scroll the page sideways */
+}
+
+/* The page's one atmospheric effect: two very soft fields behind everything,
+   fixed so they never move under a scroll and never cost a repaint. */
+body::before {
+  content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background:
+    radial-gradient(58rem 40rem at 18% -8%, #e0855b14, transparent 62%),
+    radial-gradient(52rem 38rem at 92% 8%,  #5b7fe014, transparent 60%),
+    radial-gradient(70rem 50rem at 50% 108%, #e0855b0e, transparent 60%);
+}
+
+a { color: inherit; }
+img, svg { display: block; max-width: 100%; }
+::selection { background: var(--accent); color: var(--accent-ink); }
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+  border-radius: var(--r-sm);
+}
+
+/* The one content measure. `min(100% - 2rem, …)` rather than a padded 100%
+   so the gutter is part of the width, never added to it. */
+.wrap { width: min(100% - 2rem, 72rem); margin-inline: auto; }
+.wrap-narrow { width: min(100% - 2rem, 54rem); margin-inline: auto; }
+
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+
+/* ============================================================
+   Shared pieces
+   ============================================================ */
+.eyebrow {
+  font-family: var(--mono);
+  font-size: var(--t-xs);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--accent);
+  margin-bottom: var(--s4);
+}
+
+/* `balance` distributes a heading's words evenly over its lines, which is what stops a
+   two-word last line. `pretty` only fixes the final line of body copy, which is all it
+   should do there. Both degrade to normal wrapping where unsupported. */
+h1, h2, h3 { line-height: 1.12; letter-spacing: -0.022em; font-weight: 600; text-wrap: balance; }
+p, .life-what, .judge span { text-wrap: pretty; }
+h2 { font-size: var(--t-h2); }
+h3 { font-size: var(--t-h3); line-height: 1.3; letter-spacing: -0.012em; }
+
+.lead { font-size: var(--t-lead); color: var(--ink-2); line-height: 1.6; }
+
+code, kbd, samp, pre { font-family: var(--mono); font-size: .875em; }
+p code, li code, td code {
+  background: #ffffff0f; border: 1px solid var(--line);
+  padding: .1em .38em; border-radius: .35rem;
+  font-size: .84em; color: var(--ink);
+  white-space: nowrap;
+}
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--s2);
+  min-height: 2.875rem;                      /* 46px — over the 44px floor */
+  padding: 0 var(--s5);
+  border-radius: 999px;
+  border: 1px solid transparent;
+  font: inherit; font-size: var(--t-sm); font-weight: 600;
+  text-decoration: none; cursor: pointer;
+  transition: background-color .18s var(--ease), border-color .18s var(--ease),
+              color .18s var(--ease), transform .18s var(--ease);
+}
+.btn-pri { background: var(--accent); color: var(--accent-ink); }
+.btn-sec { background: #ffffff0a; border-color: var(--line-2); color: var(--ink); }
+@media (hover: hover) {
+  .btn-pri:hover { background: #ec976f; }
+  .btn-sec:hover { background: #ffffff14; border-color: #ffffff33; }
+}
+.btn:active { transform: translateY(1px); }
+
+.pill {
+  display: inline-flex; align-items: center; gap: .45rem;
+  font-family: var(--mono); font-size: var(--t-xs);
+  padding: .3rem .65rem; border-radius: 999px;
+  border: 1px solid var(--line-2); background: #ffffff08;
+  color: var(--ink-2); white-space: nowrap;
+}
+.pill .dot { width: .4rem; height: .4rem; border-radius: 50%; background: var(--good); flex: none; }
+
+section { padding-block: var(--s9); }
+section + section { padding-top: 0; }
+.sec-head { max-width: 42rem; margin-bottom: var(--s7); }
+.sec-head p { color: var(--ink-2); margin-top: var(--s4); font-size: var(--t-lead); line-height: 1.6; }
+
+/* ============================================================
+   Nav
+   ============================================================ */
+.nav {
+  position: sticky; top: 0; z-index: 50;
+  background: #0b0c0fd9;
+  backdrop-filter: blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+.nav-in {
+  display: flex; align-items: center; gap: var(--s5);
+  min-height: 3.875rem;
+}
+.brand {
+  display: flex; align-items: center; gap: .6rem;
+  font-weight: 600; letter-spacing: -0.02em; text-decoration: none;
+  font-size: 1.0625rem; flex: none;
+}
+.brand-mark {
+  width: 1.75rem; height: 1.75rem; aspect-ratio: 1 / 1; flex: none;
+  border-radius: .55rem; background: var(--accent-soft);
+  border: 1px solid #e0855b3d;
+  display: grid; place-items: center;
+}
+.brand-mark svg { width: 1rem; height: 1rem; }
+.nav-links { display: flex; gap: var(--s5); margin-left: auto; font-size: var(--t-sm); }
+.nav-links a { color: var(--ink-2); text-decoration: none; transition: color .18s var(--ease); }
+@media (hover: hover) { .nav-links a:hover { color: var(--ink); } }
+.nav .btn { flex: none; }
+@media (max-width: 56rem) {
+  .nav-links { display: none; }
+  .nav .btn { margin-left: auto; }
+}
+
+/* ============================================================
+   Hero
+   ============================================================ */
+.hero { padding-top: clamp(var(--s8), 6vw, 7rem); padding-bottom: var(--s8); }
+/* One column until there is genuinely room for two. Below 68rem the terminal sits under
+   the copy; above it, the two share the line, which is what stops a wide monitor from
+   being half an empty page. */
+.hero-in { display: grid; gap: var(--s8); align-items: center; }
+@media (min-width: 68rem) {
+  .hero-in { grid-template-columns: minmax(0, 1fr) minmax(0, 1.04fr); gap: var(--s7); }
+  .hero-in .term { margin-top: 0; }
+  .hero h1 { font-size: clamp(2.5rem, 1.4rem + 2.4vw, 3.5rem); }
+}
+.hero h1 {
+  font-size: var(--t-hero);
+  font-weight: 700;
+  letter-spacing: -0.035em;
+  max-width: 22ch;
+  margin-bottom: var(--s5);
+}
+.hero h1 .soft { color: var(--ink-3); }
+.hero .lead { max-width: 46ch; }
+.hero-cta { display: flex; flex-wrap: wrap; gap: var(--s3); margin-top: var(--s6); }
+.hero-meta {
+  display: flex; flex-wrap: wrap; gap: var(--s3);
+  margin-top: var(--s5);
+}
+
+/* The terminal. A fixed proportion on wide screens so it never becomes a
+   letterbox; height goes automatic once it is narrow enough to need it. */
+.term {
+  margin-top: var(--s8);
+  background: #0a0b0e;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  box-shadow: 0 1.5rem 4rem #00000066, 0 0 0 1px #ffffff05 inset;
+}
+.term-bar {
+  display: flex; align-items: center; gap: .45rem;
+  padding: .7rem var(--s4);
+  border-bottom: 1px solid var(--line);
+  background: #ffffff05;
+}
+.term-bar i { width: .65rem; height: .65rem; aspect-ratio: 1 / 1; border-radius: 50%; background: #ffffff1f; display: block; }
+.term-bar span {
+  margin-left: var(--s3); font-family: var(--mono); font-size: var(--t-xs); color: var(--ink-3);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.term-body {
+  padding: var(--s5);
+  font-family: var(--mono);
+  font-size: clamp(.72rem, .68rem + .22vw, .875rem);
+  line-height: 1.85;
+  overflow-x: auto;
+}
+.term-body pre { white-space: pre; }
+.c-dim  { color: var(--ink-3); }
+.c-ink  { color: var(--ink); }
+.c-acc  { color: var(--accent); }
+.c-good { color: var(--good); }
+.c-warn { color: var(--warn); }
+
+/* ============================================================
+   Problem
+   ============================================================ */
+.problem { border-top: 1px solid var(--line); padding-top: var(--s9); }
+.three {
+  display: grid; gap: var(--s6);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 16rem), 1fr));
+}
+.three h3 { margin-bottom: var(--s3); }
+.three p { color: var(--ink-2); font-size: var(--t-sm); }
+.three .num {
+  font-family: var(--mono); font-size: var(--t-xs); color: var(--accent);
+  letter-spacing: .1em; margin-bottom: var(--s4); display: block;
+}
+
+/* ============================================================
+   Feature grid
+   ============================================================ */
+.grid {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr));
+}
+.card {
+  background: linear-gradient(180deg, #ffffff09, #ffffff04);
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  padding: var(--s5);
+  display: flex; flex-direction: column; gap: var(--s3);
+  transition: border-color .2s var(--ease), background-color .2s var(--ease), transform .2s var(--ease);
+}
+@media (hover: hover) {
+  .card:hover { border-color: #ffffff2e; transform: translateY(-2px); }
+}
+.card-ic {
+  width: 2.25rem; height: 2.25rem; aspect-ratio: 1 / 1; flex: none;
+  border-radius: .7rem; display: grid; place-items: center;
+  background: var(--accent-soft); border: 1px solid #e0855b30;
+  color: var(--accent);
+  margin-bottom: var(--s2);
+}
+.card-ic svg { width: 1.1rem; height: 1.1rem; }
+.card p { color: var(--ink-2); font-size: var(--t-sm); }
+.card .tag {
+  margin-top: auto; padding-top: var(--s3);
+  font-family: var(--mono); font-size: var(--t-xs); color: var(--ink-3);
+  border-top: 1px solid var(--line);
+}
+.card.wide { grid-column: 1 / -1; }
+
+/* ============================================================
+   Lifecycle timeline
+   ============================================================ */
+.life { display: grid; gap: 0; }
+.life-row {
+  display: grid;
+  grid-template-columns: minmax(8rem, 13rem) 1fr;
+  gap: var(--s6);
+  padding-block: var(--s5);
+  border-top: 1px solid var(--line);
+  align-items: start;
+}
+.life-row:last-child { border-bottom: 1px solid var(--line); }
+.life-when {
+  font-family: var(--mono); font-size: var(--t-sm); color: var(--accent);
+  display: flex; align-items: center; gap: var(--s3);
+}
+.life-when::before {
+  content: ""; width: .5rem; height: .5rem; aspect-ratio: 1 / 1; flex: none;
+  border-radius: 50%; border: 1.5px solid var(--accent);
+}
+.life-what { color: var(--ink-2); font-size: var(--t-sm); }
+.life-what strong { color: var(--ink); font-weight: 600; }
+@media (max-width: 44rem) {
+  .life-row { grid-template-columns: 1fr; gap: var(--s3); }
+}
+
+/* ============================================================
+   Judges
+   ============================================================ */
+.judges-wrap {
+  background: linear-gradient(180deg, #ffffff08, #ffffff03);
+  border: 1px solid var(--line);
+  border-radius: var(--r-xl);
+  padding: clamp(var(--s5), 3vw, var(--s8));
+}
+.judge-list {
+  display: grid; gap: var(--s3);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+  margin-top: var(--s6);
+}
+/* There are exactly five judges, so above this width they get exactly five columns.
+   Left to auto-fit they came out four and one, and the orphan read as a mistake. */
+@media (min-width: 62rem) { .judge-list { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.judge {
+  background: #ffffff07; border: 1px solid var(--line);
+  border-radius: var(--r); padding: var(--s4);
+}
+.judge b { display: block; font-size: var(--t-sm); margin-bottom: var(--s1); font-weight: 600; }
+.judge span { font-size: var(--t-xs); color: var(--ink-3); line-height: 1.5; display: block; }
+.caps {
+  display: flex; flex-wrap: wrap; gap: var(--s2);
+  margin-top: var(--s6); padding-top: var(--s5); border-top: 1px solid var(--line);
+}
+
+/* ============================================================
+   Evidence strip
+   ============================================================ */
+.stats {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 11rem), 1fr));
+}
+.stat {
+  border: 1px solid var(--line); border-radius: var(--r-lg);
+  padding: var(--s5); background: #ffffff05;
+}
+.stat b {
+  display: block; font-size: clamp(1.6rem, 1.3rem + 1.1vw, 2.25rem);
+  font-weight: 700; letter-spacing: -0.03em; line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+}
+.stat span { display: block; color: var(--ink-3); font-size: var(--t-xs); margin-top: var(--s2); line-height: 1.5; }
+
+/* ============================================================
+   Cost disclaimer — deliberately the loudest honest thing here
+   ============================================================ */
+.cost {
+  border: 1px solid #e6b35c3d;
+  background: linear-gradient(180deg, var(--warn-soft), #e6b35c08);
+  border-radius: var(--r-xl);
+  padding: clamp(var(--s5), 3vw, var(--s8));
+}
+.cost .eyebrow { color: var(--warn); }
+.cost h2 { max-width: 24ch; }
+.cost > p { color: var(--ink-2); margin-top: var(--s4); font-size: var(--t-lead); max-width: 58ch; }
+.why {
+  display: grid; gap: var(--s4);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 17rem), 1fr));
+  margin-top: var(--s6);
+}
+.why div { border-left: 2px solid #e6b35c4d; padding-left: var(--s4); }
+.why b { display: block; font-size: var(--t-sm); margin-bottom: var(--s2); font-weight: 600; }
+.why p { color: var(--ink-2); font-size: var(--t-sm); }
+.levers { margin-top: var(--s6); padding-top: var(--s5); border-top: 1px solid #e6b35c2e; }
+.levers h3 { margin-bottom: var(--s4); }
+.lever-list { display: grid; gap: var(--s2); }
+.lever {
+  display: grid; grid-template-columns: minmax(10rem, 15rem) 1fr; gap: var(--s4);
+  align-items: baseline;
+  font-size: var(--t-sm);
+  padding-block: var(--s2);
+}
+.lever code { color: var(--warn); background: #e6b35c14; border-color: #e6b35c2e; }
+.lever span { color: var(--ink-2); }
+@media (max-width: 40rem) { .lever { grid-template-columns: 1fr; gap: var(--s1); } }
+
+/* ============================================================
+   Download
+   ============================================================ */
+.dl {
+  display: grid; gap: var(--s6);
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
+  align-items: start;
+}
+.dl-box {
+  border: 1px solid var(--line); border-radius: var(--r-xl);
+  background: linear-gradient(180deg, #ffffff09, #ffffff03);
+  padding: clamp(var(--s5), 2.5vw, var(--s6));
+}
+.locknote {
+  display: flex; gap: var(--s3); align-items: flex-start;
+  margin-top: var(--s5); padding-top: var(--s5); border-top: 1px solid var(--line);
+  font-size: var(--t-sm); color: var(--ink-2);
+}
+.locknote svg { width: 1.1rem; height: 1.1rem; flex: none; color: var(--accent); margin-top: .15rem; }
+.hashes { margin-top: var(--s5); display: grid; gap: var(--s2); }
+.hashrow {
+  display: grid; grid-template-columns: 5rem 1fr; gap: var(--s3);
+  font-family: var(--mono); font-size: var(--t-xs); color: var(--ink-3);
+  align-items: baseline;
+}
+.hashrow b { color: var(--ink-2); font-weight: 500; }
+.hashrow span { word-break: break-all; color: var(--ink-2); }
+
+.steps { counter-reset: step; display: grid; gap: var(--s5); }
+.step { counter-increment: step; position: relative; padding-left: var(--s7); }
+.step::before {
+  content: counter(step);
+  position: absolute; left: 0; top: 0;
+  width: 1.75rem; height: 1.75rem; aspect-ratio: 1 / 1;
+  border-radius: 50%; display: grid; place-items: center;
+  background: var(--accent-soft); border: 1px solid #e0855b3d;
+  color: var(--accent); font-family: var(--mono); font-size: var(--t-xs); font-weight: 500;
+}
+.step b { display: block; margin-bottom: var(--s2); font-weight: 600; font-size: var(--t-sm); }
+.step p { color: var(--ink-2); font-size: var(--t-sm); }
+.cmd {
+  margin-top: var(--s3);
+  background: #0a0b0e; border: 1px solid var(--line); border-radius: var(--r);
+  padding: var(--s3) var(--s4);
+  font-family: var(--mono); font-size: var(--t-xs); line-height: 1.8;
+  overflow-x: auto; color: var(--ink-2);
+}
+.cmd .c-acc { color: var(--accent); }
+
+/* ============================================================
+   Limits + footer
+   ============================================================ */
+.limits { display: grid; gap: var(--s3); }
+.limit {
+  display: grid; grid-template-columns: auto 1fr; gap: var(--s3);
+  font-size: var(--t-sm); color: var(--ink-2);
+  padding-block: var(--s2);
+}
+.limit::before { content: "—"; color: var(--ink-3); font-family: var(--mono); }
+
+.foot {
+  border-top: 1px solid var(--line);
+  margin-top: var(--s9);
+  padding-block: var(--s6) var(--s7);
+  color: var(--ink-3); font-size: var(--t-sm);
+}
+.foot-in { display: flex; flex-wrap: wrap; gap: var(--s4) var(--s6); align-items: center; }
+.foot a { color: var(--ink-2); text-decoration: none; }
+@media (hover: hover) { .foot a:hover { color: var(--ink); } }
+.foot .right { margin-left: auto; font-family: var(--mono); font-size: var(--t-xs); }
+@media (max-width: 40rem) { .foot .right { margin-left: 0; } }
+
+/* ============================================================
+   Phone
+   ============================================================ */
+@media (max-width: 40rem) {
+  :root { --s9: 4rem; --s8: 3rem; --s7: 2rem; }
+  .hero { padding-top: var(--s7); }
+  .hero h1 { max-width: none; }
+  .hero-cta .btn { flex: 1 1 100%; }
+  .term-body { padding: var(--s4); }
+}
+</style>
+</head>
+<body>
+
+<a class="sr" href="#main">Skip to content</a>
+
+<header class="nav">
+  <div class="wrap nav-in">
+    <a class="brand" href="#top">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M5 8h14M5 12h14M5 16h9"/>
+        </svg>
+      </span>
+      toolkit
+    </a>
+    <nav class="nav-links" aria-label="Sections">
+      <a href="#features">Features</a>
+      <a href="#how">How it works</a>
+      <a href="#judges">Judges</a>
+      <a href="#cost">Cost</a>
+    </nav>
+    <a class="btn btn-pri" href="https://github.com/skyehosting/claude-toolkit-src/releases/latest">Download v5.1.1</a>
+  </div>
+</header>
+
+<main id="main">
+
+<!-- ========================= Hero ========================= -->
+<section class="hero" id="top">
+  <div class="wrap hero-in">
+   <div class="hero-copy">
+    <p class="eyebrow">A Claude Code plugin · v5.1.1</p>
+    <h1>Many sessions, one codebase, <span class="soft">nothing trodden on.</span></h1>
+    <p class="lead">
+      Run several Claude Code sessions over one folder of projects. The toolkit gives them
+      workspace-wide file locks, scans every edit for what a reviewer would catch, and holds the
+      end of a turn until the change has actually passed its tests.
+    </p>
+
+    <div class="hero-cta">
+      <a class="btn btn-pri" href="#download">Get the plugin</a>
+      <a class="btn btn-sec" href="#how">See what it does</a>
+    </div>
+
+    <div class="hero-meta">
+      <span class="pill"><span class="dot"></span>758 of 759 tests passing</span>
+      <span class="pill">Node ≥ 22 · no runtime dependencies</span>
+      <span class="pill">Windows &amp; Linux</span>
+    </div>
+   </div>
+
+    <div class="term" role="img" aria-label="A Claude Code session starting with the toolkit loaded: it is labelled Session B, reports the workspace and project, shows no locks held by others, four scanners present, and the UI rules in force.">
+      <div class="term-bar">
+        <i></i><i></i><i></i>
+        <span>claude — session start</span>
+      </div>
+      <div class="term-body">
+<pre><span class="c-dim">╭─</span> <span class="c-acc">toolkit</span> <span class="c-dim">─────────────────────────────────────────────╮</span>
+<span class="c-dim">│</span>  you are    <span class="c-ink">Session B</span>  <span class="c-dim">(A is live in ./routine-pwa)</span>
+<span class="c-dim">│</span>  workspace  <span class="c-ink">~/Projects</span>  <span class="c-dim">· 6 projects registered</span>
+<span class="c-dim">│</span>  locks      <span class="c-ink">0 held by you</span>  <span class="c-dim">· 2 held by A</span>
+<span class="c-dim">│</span>  scanners   <span class="c-good">✓</span> opengrep  <span class="c-good">✓</span> gitleaks  <span class="c-good">✓</span> shellcheck  <span class="c-good">✓</span> eslint
+<span class="c-dim">│</span>  ui rules   adaptive <span class="c-good">on</span> · mobile <span class="c-good">on</span> · judges <span class="c-ink">5</span> · passes <span class="c-ink">6</span>
+<span class="c-dim">╰──────────────────────────────────────────────────────╯</span>
+
+<span class="c-dim">›</span> edit  <span class="c-ink">lib/auth.js</span>
+  <span class="c-acc">lock</span>     taken, workspace-wide
+  <span class="c-acc">scan</span>     1 new finding · <span class="c-dim">2 pre-existing not shown</span>
+           <span class="c-warn">gitleaks</span>  a token-shaped string on line 41
+  <span class="c-acc">blast</span>    4 files reference this · 1 dependent project
+
+<span class="c-dim">›</span> turn end
+  <span class="c-warn">held</span>     routine-pwa has no passing run since your edit
+           <span class="c-dim">npm test → 137 passed · releasing the turn</span></pre>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Problem ========================= -->
+<section class="problem">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Why it exists</p>
+      <h2>Parallel sessions are fast until they aren't.</h2>
+      <p>
+        Three things go wrong the moment more than one session works on the same tree — and all
+        three are invisible until something is already broken.
+      </p>
+    </div>
+    <div class="three">
+      <div>
+        <span class="num">01</span>
+        <h3>They overwrite each other</h3>
+        <p>
+          Two sessions open the same file, both read it, both write it. The second write wins and
+          the first one's work is gone with no error, no conflict and nothing in git to show it
+          happened.
+        </p>
+      </div>
+      <div>
+        <span class="num">02</span>
+        <h3>Standards drift per session</h3>
+        <p>
+          One session writes classes, the next writes functions. One builds a responsive UI, the
+          next hard-codes 1920×1080. Nothing is wrong in isolation; the codebase ends up in two
+          minds about everything.
+        </p>
+      </div>
+      <div>
+        <span class="num">03</span>
+        <h3>"Done" is a claim, not a fact</h3>
+        <p>
+          A turn ends when the model stops talking, which is not the same as the change working.
+          Tests that were never run and fixes whose cause was never found both end the turn
+          exactly the same way.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Features ========================= -->
+<section id="features">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">What you get</p>
+      <h2>Fifteen things that happen whether or not anyone remembers to ask.</h2>
+      <p>
+        Most of this is not a command you run. It is wired into the session's own lifecycle, so it
+        applies to every session, every edit, every turn.
+      </p>
+    </div>
+
+    <div class="grid">
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="10.5" width="16" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg></span>
+        <h3>Workspace-wide file locks</h3>
+        <p>
+          A file is locked across every project under the workspace root before it is edited — not
+          per project, not per session. Another live session holding it blocks you by name, so the
+          collision becomes a message instead of a loss.
+        </p>
+        <span class="tag">cli/locks.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7.5 3v5.5c0 4.5-3.1 8.4-7.5 9.5-4.4-1.1-7.5-5-7.5-9.5V6z"/><path d="M9.3 12.2l1.9 1.9 3.6-3.9"/></svg></span>
+        <h3>Every edit is scanned</h3>
+        <p>
+          opengrep, gitleaks, ShellCheck and ESLint run against the last commit after each edit to
+          a code file. A new finding reaches the session <em>once</em> — pre-existing ones are
+          counted, not repeated at every save.
+        </p>
+        <span class="tag">cli/scan.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 4.5h11l3 3V19a.5.5 0 0 1-.5.5h-13A.5.5 0 0 1 5 19z"/><path d="M8.5 11h7M8.5 14.5h4.5"/></svg></span>
+        <h3>A living map per project</h3>
+        <p>
+          A map of the codebase, a changelog with the what and the why, and a fix ledger — written
+          per project and kept out of that project's git, so the records never land in a pull
+          request.
+        </p>
+        <span class="tag">&lt;project&gt;/.toolkit/</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="8.2"/><path d="M12 7.6V12l3 1.8"/></svg></span>
+        <h3>A Stop gate with teeth</h3>
+        <p>
+          The end of a turn is held, once, while an edited project has no passing test run since
+          the change — or an unverified fix in its ledger. It checks every workspace the session
+          edited in, dependents included.
+        </p>
+        <span class="tag">hooks/stop-gate.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4.5" width="18" height="12" rx="2"/><path d="M8 20h8M12 16.5V20"/></svg></span>
+        <h3>UI rules nobody has to repeat</h3>
+        <p>
+          Every session that touches a UI is handed the same rules: adapt to the window actually
+          given — size, aspect ratio, resolution, DPI, OS scale — hold shapes with aspect-ratio
+          constraints, desktop first, and ship a mobile version too.
+        </p>
+        <span class="tag">on by default</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5l2.4 5.3 5.6.7-4.1 3.9 1.1 5.6-5-2.8-5 2.8 1.1-5.6-4.1-3.9 5.6-.7z"/></svg></span>
+        <h3>Design reviews by a panel</h3>
+        <p>
+          Five independent read-only judges score a built UI on layout, display resilience,
+          usability, the mobile version and visual design. The designer answers every blocking
+          issue, then it goes again.
+        </p>
+        <span class="tag">up to 6 passes</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 7.5h16M4 12h16M4 16.5h16"/><circle cx="8.5" cy="7.5" r="2" fill="currentColor" stroke="none"/><circle cx="15" cy="16.5" r="2" fill="currentColor" stroke="none"/></svg></span>
+        <h3>Diagnosis before fixes</h3>
+        <p>
+          The fix ledger refuses to record a fix whose cause was never ruled in. A guess that
+          happens to work is not a diagnosis, and the ledger will not let it pass as one.
+        </p>
+        <span class="tag">tools/fix-ledger.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="6.5"/><path d="M15.8 15.8L20 20"/></svg></span>
+        <h3>Sourced research, in parallel</h3>
+        <p>
+          Read-only researcher subagents gather facts before the code is written. Every claim comes
+          back with a URL, a <code>file:line</code> or captured command output — anything unsourced
+          returns as an explicit unknown.
+        </p>
+        <span class="tag">research-fanout</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4.5h10a2 2 0 0 1 2 2v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-11a2 2 0 0 1 2-2z"/><path d="M9 9h6M9 12.5h6M9 16h3"/></svg></span>
+        <h3>A scope contract first</h3>
+        <p>
+          Before a build that touches more than a file or two: the goal, what done means, the
+          non-goals and a depth budget — written down, so going further than asked is checkable
+          rather than a surprise.
+        </p>
+        <span class="tag">scope-brief</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4.5 16.5l5-5 3.5 3.5 6.5-7"/><path d="M15 8h4.5v4.5"/></svg></span>
+        <h3>Blast radius, once per file</h3>
+        <p>
+          The first time a file is edited in a session, the session is told who references it and
+          which projects depend on it — before the change spreads, not after something downstream
+          breaks.
+        </p>
+        <span class="tag">cli/verify.js --refs</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4.5v15M4.5 12h15"/><circle cx="12" cy="12" r="8.5"/></svg></span>
+        <h3>One paradigm, measured</h3>
+        <p>
+          Classes or functions is settled by reading the codebase rather than guessing: greenfield
+          defaults to classes, an existing tree is matched, and the framework's own idiom beats the
+          raw count.
+        </p>
+        <span class="tag">code-paradigm</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3.5" y="5" width="17" height="12" rx="1.8"/><path d="M3.5 9h17"/><circle cx="6.5" cy="7" r=".9" fill="currentColor" stroke="none"/></svg></span>
+        <h3>Screenshots at real sizes</h3>
+        <p>
+          Captures at the sizes a UI is genuinely opened at — monitors at 100%, 125% and 150%
+          Windows scale, a 960-wide window, a phone and a tablet — so "it looks fine" is a
+          measurement.
+        </p>
+        <span class="tag">cli/capture.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.8l7.5 2.8v5.2c0 4.3-3 8-7.5 8.4-4.5-.4-7.5-4.1-7.5-8.4V6.6z"/><path d="M12 9v3.6M12 15.4v.1"/></svg></span>
+        <h3>Nothing downloads quietly</h3>
+        <p>
+          Scanner installs show every file first — its source, size and SHA-256 — and fetch nothing
+          until you say yes. Tools already on the machine are adopted rather than downloaded again.
+        </p>
+        <span class="tag">cli/install.js</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 12.5l4 4 8-9"/></svg></span>
+        <h3>A verify command you approved</h3>
+        <p>
+          A project's test command runs only after you have approved its exact text on this machine,
+          shown character for character and keyed by SHA-256. Change a character and it needs
+          approving again; a non-printable or look-alike character cannot be approved at all.
+        </p>
+        <span class="tag">cli/verify.js --trust</span>
+      </article>
+
+      <article class="card">
+        <span class="card-ic" aria-hidden="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3.5v17"/><path d="M12 8.5l5-3.2M12 14l-5-3.2"/><circle cx="18.6" cy="4.6" r="1.9"/><circle cx="5.4" cy="10.5" r="1.9"/><circle cx="12" cy="21" r="1.6"/></svg></span>
+        <h3>Mutation testing, where it is set up</h3>
+        <p>
+          Changed files can be mutation-tested with the Stryker installed <em>in that project</em> —
+          never through <code>npx</code>, so nothing is fetched behind your back. Where a project
+          has no Stryker it says so and passes, rather than failing on a tool you never chose.
+        </p>
+        <span class="tag">tools/mutation-check.js</span>
+      </article>
+
+    </div>
+  </div>
+</section>
+
+<!-- ========================= How it works ========================= -->
+<section id="how">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">How it works</p>
+      <h2>Wired into the session, not bolted onto your workflow.</h2>
+      <p>
+        There is no daemon, no service and nothing to remember. Each of these fires on a point in
+        the session's own lifecycle.
+      </p>
+    </div>
+
+    <div class="life">
+      <div class="life-row">
+        <div class="life-when">Session start</div>
+        <div class="life-what">
+          You are given a <strong>label</strong> (A, B, …), the workspace and project you are in,
+          any missing scanners, recent hook errors, settings that cannot be used — and the UI base
+          rules.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">UI work begins</div>
+        <div class="life-what">
+          The UI base rules and <strong>your own design preferences and recorded lessons</strong>
+          are handed to the session, in any folder, workspace or not.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">Before an edit</div>
+        <div class="life-what">
+          The file is <strong>locked workspace-wide</strong>. A live session holding it blocks you,
+          by name. A <code>protected_files</code> entry is refused outright — for reading as well as
+          writing.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">After an edit</div>
+        <div class="life-what">
+          A changelog line in that file's project. For code: an <strong>async security scan</strong>
+          against the last commit, including race patterns — a file checked then changed, a JSON
+          state file written in place, a lock taken without exclusive create. A file's own
+          <code>eslint-disable</code> or <code>nosemgrep</code> comment does not hide a finding.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">Turn end</div>
+        <div class="life-what">
+          Held <strong>once</strong> if an edited project — or a dependent — has a verify command
+          with no passing run since the change. Docs count; the project's own records do not. After
+          two blocks on the same state it lets go.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">A write outside the tools</div>
+        <div class="life-what">
+          A shell command that writes a file is <strong>recorded and reported</strong> at the next
+          prompt — it was neither locked nor scanned. If it hit a file another session holds, you
+          are told at once.
+        </div>
+      </div>
+      <div class="life-row">
+        <div class="life-when">Session end</div>
+        <div class="life-what">
+          Every lock it held is released, in every workspace it edited in.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Judges ========================= -->
+<section id="judges">
+  <div class="wrap">
+    <div class="judges-wrap">
+      <p class="eyebrow">Design review</p>
+      <h2>Five judges who never see each other's verdicts.</h2>
+      <p class="lead" style="margin-top:var(--s4);max-width:56ch">
+        Ask for a review and the built UI is screenshotted at real sizes, then handed to five
+        read-only judges in parallel. Each returns one JSON verdict. The designer answers every
+        blocking issue, revises, and the round runs again.
+      </p>
+
+      <div class="judge-list">
+        <div class="judge"><b>Layout</b><span>Alignment, spacing, grid, hierarchy and consistency.</span></div>
+        <div class="judge"><b>Display</b><span>Aspect ratios, resolutions, Windows scale and DPI.</span></div>
+        <div class="judge"><b>Usability</b><span>Accessibility, clarity, fidelity to your stated preferences.</span></div>
+        <div class="judge"><b>Mobile</b><span>Whether the phone and tablet versions are genuinely usable.</span></div>
+        <div class="judge"><b>Visual</b><span>Typography, colour, component states, icons, restraint.</span></div>
+      </div>
+
+      <div class="caps">
+        <span class="pill">1–5 judges</span>
+        <span class="pill">12 passes per review, hard</span>
+        <span class="pill">each judge once per pass</span>
+        <span class="pill">a daily budget of judge runs</span>
+        <span class="pill">read-only: they cannot edit</span>
+      </div>
+      <p style="margin-top:var(--s5);color:var(--ink-3);font-size:var(--t-sm)">
+        The limits live in code, not in a prompt — a session cannot talk its way past them.
+      </p>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Evidence ========================= -->
+<section id="evidence">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Evidence</p>
+      <h2>Checked, not asserted.</h2>
+    </div>
+    <div class="stats">
+      <div class="stat"><b>759</b><span>tests in the suite — 758 pass, 1 skipped (Linux-only)</span></div>
+      <div class="stat"><b>0</b><span>runtime dependencies. Node ≥ 22 built-ins only</span></div>
+      <div class="stat"><b>165</b><span>files, every one described in MANIFEST.md — a test compares it with the tree</span></div>
+      <div class="stat"><b>4</b><span>scanners wired in: opengrep, gitleaks, ShellCheck, ESLint</span></div>
+    </div>
+    <p style="margin-top:var(--s5);color:var(--ink-3);font-size:var(--t-sm);max-width:60ch">
+      Built and tested on Windows 11 with live checks in Claude Code. The 5.0 suite, the scanner
+      gate and real installs of every scanner were run on Debian 12 with Node 22 in a container
+      (2026-10-16); 5.1.x has not yet been run on Linux.
+    </p>
+  </div>
+</section>
+
+<!-- ========================= Cost ========================= -->
+<section id="cost">
+  <div class="wrap">
+    <div class="cost">
+      <p class="eyebrow">Please read this before installing</p>
+      <h2>This toolkit will increase your token usage.</h2>
+      <p>
+        Not as a side effect of a bug, and not by a little. It is the direct consequence of how the
+        toolkit works: it adds context to sessions, re-checks what was done, and starts additional
+        agents. Every one of those is a deliberate trade of tokens for quality, and you should know
+        the trade before you take it.
+      </p>
+
+      <div class="why">
+        <div>
+          <b>Context is added to every session</b>
+          <p>
+            Session start injects the workspace state and the UI rules. UI work injects the rules
+            and your preferences again. That context is carried for the rest of the conversation.
+          </p>
+        </div>
+        <div>
+          <b>Findings are delivered into the conversation</b>
+          <p>
+            Each edit can return scanner findings, a changelog write and a blast-radius note. They
+            are deduplicated, but they are still tokens on top of the edit itself.
+          </p>
+        </div>
+        <div>
+          <b>The Stop gate can cost a whole extra turn</b>
+          <p>
+            When a turn is held, the session runs the tests and responds — work that would not have
+            happened at all without the gate.
+          </p>
+        </div>
+        <div>
+          <b>Judges are subagents, and there are five</b>
+          <p>
+            A full design review is up to five judges across up to six passes — as many as 30 agent
+            runs, each reading the source and screenshots. This is by far the most expensive thing
+            here.
+          </p>
+        </div>
+        <div>
+          <b>Research fans out in parallel</b>
+          <p>
+            <code>research-fanout</code> starts a read-only researcher per question. Each one
+            browses and reads independently before reporting back.
+          </p>
+        </div>
+        <div>
+          <b>Audits read whole codebases</b>
+          <p>
+            <code>/toolkit:audit-full</code> is a careful three-pass read of one project's source.
+            It is operator-triggered for exactly this reason.
+          </p>
+        </div>
+      </div>
+
+      <div class="levers">
+        <h3>What you can turn down</h3>
+        <div class="lever-list">
+          <div class="lever"><code>/toolkit:ui judges 2</code><span>Fewer judges on a review. One to five; the cost is roughly linear.</span></div>
+          <div class="lever"><code>/toolkit:ui passes 2</code><span>Fewer rounds before a review has to settle.</span></div>
+          <div class="lever"><code>/toolkit:ui auto-judge off</code><span>Judges never run unasked — the default.</span></div>
+          <div class="lever"><code>/toolkit:ui adaptive off</code><span>Stop injecting the UI base rules into UI work.</span></div>
+          <div class="lever"><code>/toolkit:ui mobile off</code><span>Stop requiring a mobile version with every desktop UI.</span></div>
+          <div class="lever"><code>code_globs</code><span>Narrow what the scan covers, per project, in <code>projects.md</code>.</span></div>
+        </div>
+        <p style="margin-top:var(--s5);color:var(--ink-2);font-size:var(--t-sm);max-width:62ch">
+          The expensive parts are opt-in by design: audits and reviews are operator-triggered, and
+          judges do not run unless you ask. The always-on parts — locks, scanning, the changelog,
+          the Stop gate — are the cheap ones.
+        </p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Download ========================= -->
+<section id="download">
+  <div class="wrap">
+    <div class="sec-head">
+      <p class="eyebrow">Get it</p>
+      <h2>Private release. Access required.</h2>
+      <p>
+        The toolkit is distributed from a private repository: the download works for accounts that
+        have been granted access, and 404s for everyone else.
+      </p>
+    </div>
+
+    <div class="dl">
+      <div class="dl-box">
+        <h3 style="margin-bottom:var(--s4)">v5.1.1 — 22 November 2026</h3>
+        <a class="btn btn-pri" style="width:100%" href="https://github.com/skyehosting/claude-toolkit-src/releases/latest">
+          Download claude-toolkit-v5-5.1.1.zip
+        </a>
+
+        <div class="hashes">
+          <div class="hashrow"><b>size</b><span>653,757 bytes</span></div>
+          <div class="hashrow"><b>sha256</b><span>6c2a97692b8c5b8e06b56d723da5ebe5a61646c38c54fa08511cd29246f41ebd</span></div>
+          <div class="hashrow"><b>needs</b><span>Node ≥ 22 · git · Claude Code</span></div>
+        </div>
+
+        <div class="locknote">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="4" y="10.5" width="16" height="10" rx="2.2"/><path d="M8 10.5V7a4 4 0 0 1 8 0v3.5"/></svg>
+          <span>
+            No access yet? The link will show GitHub's 404 page. Ask the owner to add your GitHub
+            account to <code>claude-toolkit-src</code> as a collaborator — the same link works
+            immediately afterwards.
+          </span>
+        </div>
+      </div>
+
+      <div class="steps">
+        <div class="step">
+          <b>Unpack it somewhere permanent</b>
+          <p>
+            The plugin runs from the folder in place, so a session picks up every edit. Moving the
+            folder later means re-installing.
+          </p>
+        </div>
+        <div class="step">
+          <b>Load it</b>
+          <p>Try it in one session, or keep it on for every session.</p>
+          <div class="cmd"><span class="c-dim"># one session</span>
+claude --plugin-dir <span class="c-acc">&lt;folder&gt;</span>
+
+<span class="c-dim"># or install it properly</span>
+claude plugin marketplace add <span class="c-acc">&lt;folder&gt;</span>
+claude plugin install toolkit@toolkit-local --scope user</div>
+        </div>
+        <div class="step">
+          <b>Point it at your projects</b>
+          <p>
+            In the folder that holds them: <code>/toolkit:audit-workspace</code>, then
+            <code>/toolkit:audit-full &lt;project&gt;</code> for each one. Run
+            <code>/toolkit:setup</code> if session start reports a missing scanner.
+          </p>
+        </div>
+        <div class="step">
+          <b>Updating from a zip later</b>
+          <p>
+            5.1.1 added a supported upgrade path — check the installed version, stop on uncommitted
+            work, swap the folder in place, then <code>claude plugin update</code>. It is written
+            out in the guide.
+          </p>
+          <div class="cmd">docs/GUIDE.md → <span class="c-acc">"Install or update from a zip"</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ========================= Limits ========================= -->
+<section id="limits">
+  <div class="wrap wrap-narrow" style="margin-inline:0;max-width:46rem">
+    <div class="sec-head" style="margin-bottom:var(--s5)">
+      <p class="eyebrow">Straight answers</p>
+      <h2>What it does not do.</h2>
+    </div>
+    <div class="limits">
+      <div class="limit"><span>A shell command that writes a file (<code>cat</code>, <code>cp</code>) is not seen by any hook. It is recorded and reported, but it was never locked and never scanned.</span></div>
+      <div class="limit"><span>The scan covers the JavaScript and shell kinds of a project's <code>code_globs</code>. A file in another language is not scanned, and nothing says so at edit time.</span></div>
+      <div class="limit"><span>The Stop gate is a reminder with teeth, not a lock. It holds a turn once; the session can end the turn on the next attempt.</span></div>
+      <div class="limit"><span>The judges' cap counts agent <em>starts</em>. A judge already running can be sent a follow-up that no hook sees.</span></div>
+      <div class="limit"><span>A folder outside the workspace cannot be registered as one of its projects — make it its own workspace.</span></div>
+      <div class="limit"><span>5.1.x has not been run on Linux, and Claude Code itself has not been run there. The 5.0 suite was.</span></div>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-in">
+    <span class="brand" style="font-size:1rem">
+      <span class="brand-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><path d="M5 8h14M5 12h14M5 16h9"/></svg>
+      </span>
+      toolkit
+    </span>
+    <a href="https://github.com/skyehosting/claude-toolkit-src">Repository</a>
+    <a href="https://github.com/skyehosting/claude-toolkit-src/releases/latest">Releases</a>
+    <a href="#cost">Cost disclaimer</a>
+    <span class="right">v5.1.1 · Node ≥ 22 · private distribution</span>
+  </div>
+</footer>
+
+</body>
+</html>
